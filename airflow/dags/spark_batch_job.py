@@ -16,7 +16,7 @@ common_conf = {
 }
 
 with DAG(
-    'spark-job',
+    'batch-job',
     default_args=default_args,
     schedule_interval='@daily',
     catchup=False
@@ -54,8 +54,19 @@ with DAG(
         ),
         conf=common_conf
     )
+    
+    show_tables = SparkSubmitOperator(
+        task_id="show_tables",
+        conn_id="spark",
+        application=str(BASE_DIR / "scripts" / "spark_jobs" / "show_tables.py"),
+        packages=(
+            "org.apache.hadoop:hadoop-aws:3.3.1,"
+            "org.apache.iceberg:iceberg-spark-runtime-3.3_2.12:1.5.2"
+        ),
+        conf=common_conf
+    )
 
 
 # --- DAG Dependencies ---
 # Bronze → Bronze Quality Check
-bronze_batch_load >> silver_clean_transform >> gold_transform
+bronze_batch_load >> silver_clean_transform >> gold_transform >> show_tables

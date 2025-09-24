@@ -12,6 +12,7 @@ def create_spark():
         .config("spark.hadoop.fs.s3a.secret.key", os.getenv("MINIO_SECRET_KEY"))
         .config("spark.hadoop.fs.s3a.path.style.access", "true")
         # Iceberg config
+        .config("spark.sql.extensions", "org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions") 
         .config("spark.sql.catalog.silver", "org.apache.iceberg.spark.SparkCatalog")
         .config("spark.sql.catalog.silver.type", "hadoop")
         .config("spark.sql.catalog.silver.warehouse", "s3a://silver-layer")
@@ -47,7 +48,6 @@ def transform(spark):
     order_items = spark.read.parquet(f"{bronze}/brz.order_items")
     purchase_event = spark.read.parquet(f"{bronze}/brz.purchase_event")
 
-    # chuẩn hóa orders + order_items thành dạng purchase
     from_orders = (
         orders.join(order_items, "order_id", "inner")
               .filter((col("quantity") > 0) & (col("price") > 0))
@@ -60,7 +60,6 @@ def transform(spark):
               )
     )
 
-    # chuẩn hóa purchase_event (streaming)
     from_events = (
         purchase_event
             .filter((col("quantity") > 0) & (col("price") > 0))
@@ -73,10 +72,8 @@ def transform(spark):
             )
     )
 
-    # gộp lại thành fact_purchase_event
     fact_purchase = from_orders.unionByName(from_events, allowMissingColumns=True)
-
-    # validate user_id & product_id tồn tại
+    
     fact_purchase = (
         fact_purchase.join(dim_users, "user_id", "inner")
                      .join(dim_products, "product_id", "inner")

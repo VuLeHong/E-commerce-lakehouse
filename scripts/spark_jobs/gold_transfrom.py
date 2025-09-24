@@ -12,6 +12,7 @@ def create_spark():
         .config("spark.hadoop.fs.s3a.secret.key", os.getenv("MINIO_SECRET_KEY"))
         .config("spark.hadoop.fs.s3a.path.style.access", "true")
         # Iceberg config
+        .config("spark.sql.extensions", "org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions") 
         .config("spark.sql.catalog.silver", "org.apache.iceberg.spark.SparkCatalog")
         .config("spark.sql.catalog.silver.type", "hadoop")
         .config("spark.sql.catalog.silver.warehouse", "s3a://silver-layer")
@@ -22,7 +23,7 @@ def create_spark():
     )
 
 def transform(spark):
-    # đọc từ silver
+    
     fact_purchase = spark.table("silver.fact_purchase_event")
     fact_reviews = spark.table("silver.fact_reviews")
     dim_products = spark.table("silver.dim_products")

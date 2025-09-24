@@ -16,7 +16,7 @@ common_conf = {
 }
 
 with DAG(
-    'spark-job',
+    'streaming-job',
     default_args=default_args,
     schedule_interval='@once',
     catchup=False

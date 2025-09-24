@@ -33,7 +33,7 @@ def create_SparkSession() -> SparkSession:
         .getOrCreate()
     )
 
-# ====== Schema cho từng event ======
+# ====== Schema ======
 def get_event_schema(event_type: str) -> StructType:
     base_fields = [
         StructField("event_id", StringType(), True),
@@ -82,11 +82,8 @@ class RedisSink(ForeachWriter):
             else:
                 return
 
-            # Push sản phẩm vào list
             self.r.lpush(key, product_id)
-            # Giữ tối đa 50 sản phẩm gần nhất
             self.r.ltrim(key, 0, 49)
-            # Đặt TTL (vd 24h)
             self.r.expire(key, 24 * 3600)
 
         except Exception as e:
@@ -106,7 +103,6 @@ def streaming_load_events(spark: SparkSession) -> None:
         topic = f"{TOPIC_PREFIX}.{etype}"
         bronze_path = f"s3a://bronze-layer/brz.{etype}_event"
 
-        # Đọc từ Kafka
         df_raw = (
             spark.readStream.format("kafka")
             .option("kafka.bootstrap.servers", BOOTSTRAP_SERVERS)
@@ -126,7 +122,7 @@ def streaming_load_events(spark: SparkSession) -> None:
                   .withColumn("day", dayofmonth(current_timestamp()))
         )
 
-        # Sink 1: Lakehouse (Parquet Bronze)
+        # Sink 1
         (
             df_parsed.writeStream
             .format("parquet")
@@ -138,7 +134,7 @@ def streaming_load_events(spark: SparkSession) -> None:
         )
         logger.info(f"[BRONZE][{etype}] Streaming write -> {bronze_path}")
 
-        # Sink 2: Redis (chỉ cho page_view & add_to_cart)
+        # Sink 2
         if etype in ["page_view", "add_to_cart"]:
             df_for_redis = (
                 df_parsed
