@@ -1,0 +1,95 @@
+version: "3.9"
+
+services:
+  zookeeper:
+    image: bitnami/zookeeper:3.9
+    container_name: zookeeper
+    environment:
+      - ALLOW_ANONYMOUS_LOGIN=yes
+    ports:
+      - "2181:2181"
+    networks:
+      - myNetwork
+    restart: always
+
+  kafka:
+    image: bitnami/kafka:3.6
+    container_name: kafka
+    depends_on:
+      - zookeeper
+    ports:
+      - "9092:9092"   # internal
+      - "29092:29092" # external host access
+    environment:
+      - KAFKA_CFG_ZOOKEEPER_CONNECT=zookeeper:2181
+      - KAFKA_CFG_ADVERTISED_LISTENERS=PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:29092
+      - KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP=PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      - KAFKA_CFG_LISTENERS=PLAINTEXT://:9092,PLAINTEXT_HOST://:29092
+      - KAFKA_CFG_AUTO_CREATE_TOPICS_ENABLE=true
+      - ALLOW_PLAINTEXT_LISTENER=yes
+    networks:
+      - myNetwork
+    restart: always
+
+  # flink-jobmanager:
+  #   image: bitnami/flink:2
+  #   container_name: flink-jobmanager
+  #   environment:
+  #     - FLINK_MODE=jobmanager
+  #     - FLINK_JOB_MANAGER_RPC_ADDRESS=flink-jobmanager
+  #   ports:
+  #     - "8081:8081" # Flink REST API / UI
+  #   volumes:
+  #     - ./scripts/flink_jobs:/opt/bitnami/flink/scripts
+  #   networks:
+  #     - myNetwork
+  #   restart: unless-stopped
+
+  # flink-taskmanager:
+  #   image: bitnami/flink:2
+  #   container_name: flink-taskmanager
+  #   depends_on:
+  #     - flink-jobmanager
+  #   environment:
+  #     - FLINK_MODE=taskmanager
+  #     - FLINK_JOB_MANAGER_RPC_ADDRESS=flink-jobmanager
+  #     - FLINK_TASKMANAGER_NUMBER_OF_TASK_SLOTS=2
+  #   volumes:
+  #     - ./scripts/flink_jobs:/opt/bitnami/flink/scripts
+  #   networks:
+  #     - myNetwork
+  #   restart: unless-stopped
+
+  redis:
+    image: redis/redis-stack:latest
+    container_name: redis
+    environment:
+      - REDIS_PASSWORD=your_secure_password
+    ports:
+      - "6379:6379"
+      - "8001:8001"
+    depends_on:
+      kafka: 
+        condition: service_started
+    volumes:
+      - ./volumes/redis:/data
+    networks:
+      - myNetwork
+    restart: always
+  
+  server:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    container_name: server
+    ports:
+      - "8000:8000"
+    depends_on:
+      - redis
+    networks:
+      - myNetwork
+    restart: always
+
+networks:
+  myNetwork:
+    name: myNetwork

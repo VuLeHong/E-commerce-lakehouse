@@ -1,0 +1,7 @@
+apache-airflow-providers-apache-spark==5.0.0
+pyspark==3.5.1
+grpcio-status==1.59.0
+minio
+pydeequ
+python-dotenv==1.0.1
+redis==5.0.1

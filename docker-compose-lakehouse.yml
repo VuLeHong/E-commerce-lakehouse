@@ -1,0 +1,259 @@
+version: "3.9"
+
+x-spark-common: &spark-common
+  image: bitnami/spark:3.5.1
+  ports:
+    - "4040:4040"
+  volumes:
+    - ./scripts/spark_jobs:/opt/bitnami/spark/scripts
+    - ./.env:/opt/bitnami/spark/.env
+  networks:
+    - myNetwork
+
+x-airflow-common: &airflow-common
+  build:
+    context: ./airflow
+    dockerfile: Dockerfile
+  image: custom-airflow:2.9.2
+  environment:
+    &airflow-common-env
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres:5432/airflow
+    AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+    AIRFLOW__API__AUTH_BACKENDS: 'airflow.api.auth.backend.basic_auth,airflow.api.auth.backend.session'
+    POSTGRES_USER: ${POSTGRES_USER}
+    POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    POSTGRES_DATABASE: ${POSTGRES_DATABASE}
+  volumes:
+    - ./airflow/dags:/opt/airflow/dags
+    - ./airflow/logs:/opt/airflow/logs
+    - ./airflow/requirements.txt:/opt/airflow/requirements.txt
+    - ./data:/opt/airflow/data
+    - ./scripts/spark_jobs:/opt/airflow/scripts/spark_jobs
+    - ./scripts/utils.py:/opt/airflow/scripts/utils.py
+    - ./jars:/opt/airflow/jars
+    - ./logs:/opt/airflow/logger
+    - ./volumes/spark-cache/.ivy2:/home/airflow/.ivy2
+    - ./.env:/opt/airflow/.env
+
+services:
+  spark-master:
+    <<: *spark-common
+    container_name: spark-master
+    command: bin/spark-class org.apache.spark.deploy.master.Master
+    ports:
+      - "9090:8080"
+      - "7077:7077"
+    restart: always
+    networks:
+      - myNetwork
+
+  spark-worker:
+    <<: *spark-common
+    container_name: spark-worker
+    command: bin/spark-class org.apache.spark.deploy.worker.Worker spark://spark-master:7077
+    depends_on:
+      - spark-master
+    environment:
+      SPARK_MODE: worker
+      SPARK_WORKER_CORES: 2
+      SPARK_WORKER_MEMORY: 2g
+      SPARK_MASTER_URL: spark://spark-master:7077
+    restart: always
+    networks:
+      - myNetwork
+
+  postgres:
+    image: postgres:15
+    container_name: postgres
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: airflow
+    ports:
+      - "5432:5432"
+    restart: always
+    networks:
+      - myNetwork
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U airflow -d airflow"]
+      interval: 10s
+      retries: 5
+      start_period: 10s
+
+  backend-postgres:
+    image: postgres:15
+    container_name: backend-postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DATABASE}
+    ports:
+      - "5433:5432"
+    restart: always
+    networks:
+      - myNetwork
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DATABASE}"]
+      interval: 10s
+      retries: 5
+      start_period: 10s
+
+  airflow-webserver:
+    <<: *airflow-common
+    command: >
+      bash -c "airflow webserver"
+    restart: always
+    networks:
+      - myNetwork
+    ports:
+      - "8080:8080"
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+
+  airflow-scheduler:
+    <<: *airflow-common
+    command: >
+      bash -c "airflow scheduler"
+    restart: always
+    networks:
+      - myNetwork
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+
+  airflow-init:
+    <<: *airflow-common
+    command:
+      - bash
+      - -c
+      - >
+        airflow db migrate &&
+        airflow users create --username admin --password admin --firstname Admin --lastname User --role Admin --email admin@example.com
+    restart: "on-failure"
+    networks:
+      - myNetwork
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  minio:
+    image: minio/minio:latest
+    container_name: minio
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    volumes:
+      - ./volumes/minio:/data
+    command: server /data --console-address ":9001"
+    restart: always
+    networks:
+      - myNetwork
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  minio-mc:
+    image: minio/mc:latest
+    container_name: minio-mc
+    depends_on:
+      minio:
+        condition: service_healthy
+    volumes:
+      - /tmp:/tmp
+    environment:
+      AWS_ACCESS_KEY_ID: minioadmin
+      AWS_SECRET_ACCESS_KEY: minioadmin
+      AWS_REGION: dummy-region
+    entrypoint: >
+      /bin/sh -c "
+      echo '⏳ Waiting for MinIO to be ready...' &&
+      until mc alias set local http://minio:9000 minioadmin minioadmin; do
+        sleep 2;
+      done &&
+      echo '✅ MinIO is ready. Setting up buckets...' &&
+      (mc ls local/bronze-layer || mc mb -p local/bronze-layer) &&
+      (mc ls local/silver-layer || mc mb -p local/silver-layer) &&
+      (mc ls local/gold-layer   || mc mb -p local/gold-layer) &&
+      echo '🎉 Buckets initialized successfully'
+      "
+    restart: "on-failure"
+    networks:
+      - myNetwork
+
+  dremio:
+    image: dremio/dremio-oss:latest
+    container_name: dremio
+    ports:
+      - "31010:31010" # ODBC/JDBC
+      - "9047:9047"   # Dremio UI
+    environment:
+      - DREMIO_JAVA_SERVER_HEAP_MAX=4G
+    volumes:
+      - ./volumes/dremio:/opt/dremio/data
+      - ./volumes/dremio/conf/core-site.xml:/opt/dremio/conf/core-site.xml
+    restart: always
+    networks:
+      - myNetwork
+    depends_on:
+      minio:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:9047 || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+
+  superset-initdb:
+    image: postgres:15
+    container_name: superset-initdb
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: >
+      bash -c "
+      psql -h postgres -U airflow -d airflow -c 'CREATE DATABASE superset;'
+      "
+    environment:
+      PGPASSWORD: airflow
+    networks:
+      - myNetwork
+    restart: "on-failure"
+
+  superset:
+    image: apache/superset:latest
+    container_name: superset
+    ports:
+      - "8088:8088"
+    environment:
+      SUPERSET_SECRET_KEY: "your_random_secret_key"
+      SUPERSET_LOAD_EXAMPLES: "no"
+      SUPERSET_DATABASE_URI: postgresql+psycopg2://airflow:airflow@postgres:5432/superset
+    depends_on:
+      superset-initdb:
+        condition: service_completed_successfully
+      dremio:
+        condition: service_healthy
+    volumes:
+      - ./volumes/superset:/app/superset_home
+    command: >
+      sh -c "
+      superset db upgrade &&
+      superset fab create-admin --username admin --firstname Admin --lastname User --email admin@example.com --password admin &&
+      superset init &&
+      superset run -h 0.0.0.0 -p 8088 --with-threads
+      "
+    restart: always
+    networks:
+      - myNetwork
+
+networks:
+  myNetwork:
+    name: myNetwork
