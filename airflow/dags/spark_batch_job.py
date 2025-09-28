@@ -39,6 +39,7 @@ with DAG(
     application=str(BASE_DIR / "scripts" / "spark_jobs" / "silver_clean_transform.py"),
     packages=(
         "org.apache.hadoop:hadoop-aws:3.3.1,"
+        "com.amazonaws:aws-java-sdk-bundle:1.12.262,"
         "org.apache.iceberg:iceberg-spark-runtime-3.3_2.12:1.5.2"
     ),
     conf=common_conf
@@ -50,9 +51,13 @@ with DAG(
         application=str(BASE_DIR / "scripts" / "spark_jobs" / "gold_transfrom.py"),
         packages=(
             "org.apache.hadoop:hadoop-aws:3.3.1,"
+            "com.amazonaws:aws-java-sdk-bundle:1.12.262,"
             "org.apache.iceberg:iceberg-spark-runtime-3.3_2.12:1.5.2"
         ),
-        conf=common_conf
+        conf=common_conf,
+        executor_memory="512m",
+        total_executor_cores=1,
+        deploy_mode="client"
     )
     
     show_tables = SparkSubmitOperator(
@@ -61,9 +66,13 @@ with DAG(
         application=str(BASE_DIR / "scripts" / "spark_jobs" / "show_tables.py"),
         packages=(
             "org.apache.hadoop:hadoop-aws:3.3.1,"
+            "com.amazonaws:aws-java-sdk-bundle:1.12.262,"
             "org.apache.iceberg:iceberg-spark-runtime-3.3_2.12:1.5.2"
         ),
-        conf=common_conf
+        conf=common_conf,
+        executor_memory="512m",
+        total_executor_cores=1,
+        deploy_mode="client"
     )
 
 

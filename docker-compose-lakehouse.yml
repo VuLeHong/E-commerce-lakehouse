@@ -181,6 +181,7 @@ services:
       (mc ls local/bronze-layer || mc mb -p local/bronze-layer) &&
       (mc ls local/silver-layer || mc mb -p local/silver-layer) &&
       (mc ls local/gold-layer   || mc mb -p local/gold-layer) &&
+      (mc ls local/checkpoints   || mc mb -p local/checkpoints) &&
       echo '🎉 Buckets initialized successfully'
       "
     restart: "on-failure"

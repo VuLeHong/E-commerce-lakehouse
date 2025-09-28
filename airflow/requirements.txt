@@ -5,3 +5,6 @@ minio
 pydeequ
 python-dotenv==1.0.1
 redis==5.0.1
+py4j==0.10.9.7
+kafka-python==2.0.2
+python-snappy

@@ -77,19 +77,6 @@ services:
       - myNetwork
     restart: always
   
-  server:
-    build:
-      context: ./server
-      dockerfile: Dockerfile
-    container_name: server
-    ports:
-      - "8000:8000"
-    depends_on:
-      - redis
-    networks:
-      - myNetwork
-    restart: always
-
 networks:
   myNetwork:
     name: myNetwork

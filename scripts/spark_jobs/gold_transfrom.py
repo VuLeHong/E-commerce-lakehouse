@@ -1,6 +1,23 @@
 import os
+import sys
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+import logging
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import col, sum as _sum, count, avg, month, year
+from dotenv import load_dotenv
+from pathlib import Path
+
+
+BASE_DIR = Path(__file__).resolve().parent.parent.parent
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s"
+)
+logger = logging.getLogger(__name__)
+
+dotenv_path = BASE_DIR / ".env"
+load_dotenv(dotenv_path)
 
 def create_spark():
     return (

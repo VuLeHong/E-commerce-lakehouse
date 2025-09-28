@@ -1,5 +1,8 @@
 import os
 import sys
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+import json
+import time
 import logging
 from pathlib import Path
 from dotenv import load_dotenv
@@ -9,7 +12,7 @@ from pyspark.sql.functions import *
 from pyspark.sql.types import *
 
 import redis
-from pyspark.sql.streaming import ForeachWriter
+from kafka import KafkaProducer
 
 # ====== Setup ======
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
@@ -23,13 +26,15 @@ load_dotenv(dotenv_path)
 def create_SparkSession() -> SparkSession:
     return (
         SparkSession.builder
-        .appName("Streaming - Kafka to Lakehouse + Redis")
+        .appName("Streaming - Kafka to Lakehouse + Redis + Rerank")
         .config("spark.hadoop.fs.s3a.endpoint", os.getenv("MINIO_ENDPOINT"))
         .config("spark.hadoop.fs.s3a.access.key", os.getenv("MINIO_ACCESS_KEY"))
         .config("spark.hadoop.fs.s3a.secret.key", os.getenv("MINIO_SECRET_KEY"))
         .config("spark.hadoop.fs.s3a.path.style.access", "true")
         .config("spark.hadoop.fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem")
-        .config("spark.jars.packages", "org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.1")
+        .config("spark.jars.packages", 
+                "org.apache.hadoop:hadoop-aws:3.3.1,"
+                "org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.1")
         .getOrCreate()
     )
 
@@ -59,44 +64,113 @@ def get_event_schema(event_type: str) -> StructType:
 
     return StructType(base_fields + extra)
 
-# ====== Redis Sink ======
-class RedisSink(ForeachWriter):
-    def open(self, partition_id, epoch_id):
-        # Redis service name trong docker-compose phải là "redis"
-        self.r = redis.Redis(host="redis", port=6379, db=0)
-        return True
+# ====== Rerank helper ======
+def rerank_simple(offline_recs, views, cart):
+    if offline_recs is None:
+        offline_recs = []
+    if views is None:
+        views = []
+    if cart is None:
+        cart = []
+    boosted = list(cart) + list(views) + [x for x in offline_recs if x not in cart and x not in views]
+    # dedupe giữ thứ tự, giới hạn 10
+    seen, out = set(), []
+    for pid in boosted:
+        if pid not in seen:
+            out.append(pid)
+            seen.add(pid)
+        if len(out) >= 10:
+            break
+    return out
 
-    def process(self, row):
-        try:
-            user_id = row["user_id"]
-            product_id = row["product_id"]
-            event_type = row["event_type"]
+# ====== foreachBatch Sinks ======
+def write_to_redis(batch_df, batch_id):
+    redis_host = os.getenv("REDIS_HOST", "redis")
+    redis_port = int(os.getenv("REDIS_PORT", 6379))
+    r = redis.Redis(host=redis_host, port=redis_port, db=0)
 
-            if not user_id or not product_id:
-                return
+    rows = batch_df.collect()
+    for row in rows:
+        rowd = row.asDict()
+        user_id = rowd.get("user_id")
+        product_id = rowd.get("product_id")
+        event_type = rowd.get("event_type")
 
-            if event_type == "page_view":
-                key = f"user:{user_id}:views"
-            elif event_type == "add_to_cart":
-                key = f"user:{user_id}:cart"
-            else:
-                return
+        if not user_id or not product_id:
+            continue
 
-            self.r.lpush(key, product_id)
-            self.r.ltrim(key, 0, 49)
-            self.r.expire(key, 24 * 3600)
+        if event_type == "page_view":
+            key = f"user:{user_id}:views"
+        elif event_type == "add_to_cart":
+            key = f"user:{user_id}:cart"
+        else:
+            continue
 
-        except Exception as e:
-            logger.error(f"RedisSink error: {e}")
+        r.lpush(key, product_id)
+        r.ltrim(key, 0, 49)
+        r.expire(key, 24 * 3600)
 
-    def close(self, error):
-        if hasattr(self, "r"):
-            self.r.close()
+    r.close()
+
+
+def write_rerank_kafka(batch_df, batch_id):
+    redis_host = os.getenv("REDIS_HOST", "redis")
+    redis_port = int(os.getenv("REDIS_PORT", 6379))
+    r = redis.Redis(host=redis_host, port=redis_port, db=0, decode_responses=True)
+
+    kafka_bootstrap = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "kafka:9092")
+    producer = KafkaProducer(
+        bootstrap_servers=kafka_bootstrap,
+        acks="all",
+        retries=5,
+        linger_ms=20,
+        batch_size=32 * 1024,
+        compression_type="snappy",
+        value_serializer=lambda v: json.dumps(v).encode("utf-8"),
+        key_serializer=lambda k: k.encode("utf-8"),
+    )
+    topic = os.getenv("RERANK_TOPIC", "recommend.reranked")
+
+    rows = batch_df.collect()
+    for row in rows:
+        rowd = row.asDict()
+        user_id = rowd.get("user_id")
+        if not user_id:
+            continue
+
+        product_id = rowd.get("product_id")
+        event_id = rowd.get("event_id")
+        event_type = rowd.get("event_type")
+
+        offline_recs = r.lrange(f"recommend:offline:{user_id}", 0, -1) or []
+        views = r.lrange(f"user:{user_id}:views", 0, 9) or []
+        cart = r.lrange(f"user:{user_id}:cart", 0, 9) or []
+
+        final_recs = rerank_simple(offline_recs, views, cart)
+
+        payload = {
+            "user_id": user_id,
+            "event_id": event_id,
+            "event_type": event_type,
+            "product_trigger": product_id,
+            "timestamp": int(time.time()),
+            "recommendations": final_recs,
+            "baseline_len": len(offline_recs),
+            "views_len": len(views),
+            "cart_len": len(cart),
+        }
+
+        producer.send(topic, key=user_id, value=payload)
+
+    producer.flush()
+    producer.close()
+    r.close()
 
 # ====== Streaming Job ======
 def streaming_load_events(spark: SparkSession) -> None:
-    BOOTSTRAP_SERVERS = "kafka:9092"
-    TOPIC_PREFIX = "events"
+    BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "kafka:9092")
+    TOPIC_PREFIX = os.getenv("EVENT_TOPIC_PREFIX", "events")
+    CHECKPOINT_BASE = os.getenv("CHECKPOINT_BASE", "s3a://checkpoints")
     EVENT_TYPES = ["page_view", "add_to_cart", "purchase", "review"]
 
     for etype in EVENT_TYPES:
@@ -122,11 +196,11 @@ def streaming_load_events(spark: SparkSession) -> None:
                   .withColumn("day", dayofmonth(current_timestamp()))
         )
 
-        # Sink 1
+        # Sink 1: Lakehouse
         (
             df_parsed.writeStream
             .format("parquet")
-            .option("checkpointLocation", f"s3a://bronze-layer/_checkpoints/{etype}")
+            .option("checkpointLocation", f"{CHECKPOINT_BASE}/{etype}")
             .option("path", bronze_path)
             .partitionBy("year", "month", "day")
             .outputMode("append")
@@ -134,21 +208,32 @@ def streaming_load_events(spark: SparkSession) -> None:
         )
         logger.info(f"[BRONZE][{etype}] Streaming write -> {bronze_path}")
 
-        # Sink 2
+        # Sink 2: Realtime
         if etype in ["page_view", "add_to_cart"]:
-            df_for_redis = (
+            df_for_realtime = (
                 df_parsed
                 .filter(col("user_id").isNotNull() & col("product_id").isNotNull())
                 .withColumn("event_type", lit(etype))
             )
 
+            # Redis cache 
             (
-                df_for_redis.writeStream
-                .foreach(RedisSink())
+                df_for_realtime.writeStream
+                .foreachBatch(write_to_redis)
                 .outputMode("append")
                 .start()
             )
             logger.info(f"[REDIS][{etype}] Streaming write -> Redis")
+
+            # Rerank -> Kafka
+            (
+                df_for_realtime.writeStream
+                .foreachBatch(write_rerank_kafka)
+                .outputMode("append")
+                .option("checkpointLocation", f"{CHECKPOINT_BASE}/rerank_{etype}")
+                .start()
+            )
+            logger.info(f"[RERANK][{etype}] Streaming rerank -> Kafka recommend.reranked")
 
     spark.streams.awaitAnyTermination()
 
@@ -156,13 +241,19 @@ def streaming_load_events(spark: SparkSession) -> None:
 def main():
     logger.info("======== [STREAMING FLOW START] ========")
     try:
+        logger.info(f"MINIO_ENDPOINT={os.getenv('MINIO_ENDPOINT')}")
+        logger.info(f"MINIO_ACCESS_KEY={os.getenv('MINIO_ACCESS_KEY')}")
+        logger.info(f"KAFKA_BOOTSTRAP_SERVERS={os.getenv('KAFKA_BOOTSTRAP_SERVERS')}")
+        logger.info(f"REDIS_HOST={os.getenv('REDIS_HOST')}")
+        logger.info(f"REDIS_PORT={os.getenv('REDIS_PORT')}")
+        
         spark = create_SparkSession()
         streaming_load_events(spark)
-        spark.stop()
         logger.info("======== [STREAMING FLOW COMPLETED] ========")
     except Exception as e:
-        logger.error(f"Streaming job failed: {e}")
+        logger.error(f"Streaming job failed: {e}", exc_info=True)
         sys.exit(1)
+
 
 if __name__ == "__main__":
     main()
