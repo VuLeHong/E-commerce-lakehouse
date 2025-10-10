@@ -7,7 +7,6 @@ from pyspark.sql.functions import col, sum as _sum, count, avg, month, year
 from dotenv import load_dotenv
 from pathlib import Path
 
-
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
 
 logging.basicConfig(
@@ -19,28 +18,39 @@ logger = logging.getLogger(__name__)
 dotenv_path = BASE_DIR / ".env"
 load_dotenv(dotenv_path)
 
+
 def create_spark():
     return (
-        SparkSession.builder
-        .appName("Transform Silver → Gold (Iceberg)")
-        # MinIO config
+            SparkSession.builder
+        .appName("Transform Silver → Gold (Iceberg + Nessie)")
+        # --- MinIO config ---
         .config("spark.hadoop.fs.s3a.endpoint", os.getenv("MINIO_ENDPOINT"))
         .config("spark.hadoop.fs.s3a.access.key", os.getenv("MINIO_ACCESS_KEY"))
         .config("spark.hadoop.fs.s3a.secret.key", os.getenv("MINIO_SECRET_KEY"))
         .config("spark.hadoop.fs.s3a.path.style.access", "true")
-        # Iceberg config
-        .config("spark.sql.extensions", "org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions") 
+        .config("spark.hadoop.fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem")
+        
+        .config("spark.sql.extensions", "org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions, org.projectnessie.spark.extensions.NessieSparkSessionExtensions") 
         .config("spark.sql.catalog.silver", "org.apache.iceberg.spark.SparkCatalog")
-        .config("spark.sql.catalog.silver.type", "hadoop")
+        # .config("spark.sql.catalog.silver.type", "nessie")
+        .config("spark.sql.catalog.silver.catalog-impl", "org.apache.iceberg.nessie.NessieCatalog")
+        .config("spark.sql.catalog.silver.uri", "http://nessie:19120/api/v2")
+        .config("spark.sql.catalog.silver.ref", "main")
+        .config("spark.sql.catalog.silver.authentication.type", "NONE")
         .config("spark.sql.catalog.silver.warehouse", "s3a://silver-layer")
+        
         .config("spark.sql.catalog.gold", "org.apache.iceberg.spark.SparkCatalog")
-        .config("spark.sql.catalog.gold.type", "hadoop")
+        # .config("spark.sql.catalog.gold.type", "nessie")
+        .config("spark.sql.catalog.gold.catalog-impl", "org.apache.iceberg.nessie.NessieCatalog")
+        .config("spark.sql.catalog.gold.uri", "http://nessie:19120/api/v2")
+        .config("spark.sql.catalog.gold.ref", "main")
+        .config("spark.sql.catalog.gold.authentication.type", "NONE")
         .config("spark.sql.catalog.gold.warehouse", "s3a://gold-layer")
         .getOrCreate()
     )
 
+
 def transform(spark):
-    
     fact_purchase = spark.table("silver.fact_purchase_event")
     fact_reviews = spark.table("silver.fact_reviews")
     dim_products = spark.table("silver.dim_products")
@@ -58,7 +68,11 @@ def transform(spark):
             count("*").alias("num_purchases")
         )
     )
-    sales_summary.writeTo("gold.sales_summary").createOrReplace()
+    sales_summary.writeTo("gold.sales_summary") \
+                .partitionedBy("year", "month") \
+                .option("merge-schema", "true") \
+                .createOrReplace()
+
 
     # --- REVIEW SUMMARY ---
     review_summary = (
@@ -72,7 +86,11 @@ def transform(spark):
             avg("rating").alias("avg_rating")
         )
     )
-    review_summary.writeTo("gold.review_summary").createOrReplace()
+    review_summary.writeTo("gold.review_summary") \
+                .partitionedBy("year", "month") \
+                .option("merge-schema", "true") \
+                .createOrReplace()
+
 
 
 if __name__ == "__main__":

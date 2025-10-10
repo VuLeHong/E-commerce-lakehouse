@@ -1,7 +1,7 @@
 version: "3.9"
 
 x-spark-common: &spark-common
-  image: bitnami/spark:3.5.1
+  image: bitnamilegacy/spark:3.5.1
   ports:
     - "4040:4040"
   volumes:
@@ -70,9 +70,17 @@ services:
       POSTGRES_USER: airflow
       POSTGRES_PASSWORD: airflow
       POSTGRES_DB: airflow
+    command: >
+      postgres
+      -c shared_buffers=192MB
+      -c work_mem=8MB
+      -c maintenance_work_mem=32MB
+      -c effective_cache_size=256MB
+      -c max_connections=40
     ports:
       - "5432:5432"
     restart: always
+    mem_limit: 768m
     networks:
       - myNetwork
     healthcheck:
@@ -88,9 +96,17 @@ services:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DATABASE}
+    command: >
+      postgres
+      -c shared_buffers=192MB
+      -c work_mem=8MB
+      -c maintenance_work_mem=32MB
+      -c effective_cache_size=256MB
+      -c max_connections=40
     ports:
       - "5433:5432"
     restart: always
+    mem_limit: 768m
     networks:
       - myNetwork
     healthcheck:
@@ -147,10 +163,15 @@ services:
     environment:
       MINIO_ROOT_USER: minioadmin
       MINIO_ROOT_PASSWORD: minioadmin
+      MINIO_CACHE_DRIVES: /tmp
+      MINIO_CACHE_QUOTA: 60
+      MINIO_BROWSER: on
+      MINIO_REGION_NAME: us-east-1
     volumes:
       - ./volumes/minio:/data
     command: server /data --console-address ":9001"
     restart: always
+    mem_limit: 768m
     networks:
       - myNetwork
     healthcheck:
@@ -188,28 +209,39 @@ services:
     networks:
       - myNetwork
 
+  nessie:
+    image: projectnessie/nessie:0.76.6
+    container_name: nessie
+    networks:
+      - myNetwork
+    ports:
+      - 19120:19120
+
   dremio:
     image: dremio/dremio-oss:latest
     container_name: dremio
+    platform: linux/x86_64
     ports:
       - "31010:31010" # ODBC/JDBC
+      - "32010:32010" # Arrow Flight SQL (khuyến nghị cho Superset)
       - "9047:9047"   # Dremio UI
     environment:
-      - DREMIO_JAVA_SERVER_HEAP_MAX=4G
-    volumes:
-      - ./volumes/dremio:/opt/dremio/data
-      - ./volumes/dremio/conf/core-site.xml:/opt/dremio/conf/core-site.xml
+      - DREMIO_JAVA_SERVER_HEAP_MAX=2G
+      - DREMIO_JAVA_SERVER_HEAP_MIN=512M
     restart: always
+    mem_limit: 2g
     networks:
       - myNetwork
     depends_on:
       minio:
         condition: service_healthy
+      nessie:
+        condition: service_started
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:9047 || exit 1"]
       interval: 15s
       timeout: 10s
-      retries: 10
+      retries: 5
       start_period: 30s
 
   superset-initdb:
@@ -229,12 +261,12 @@ services:
     restart: "on-failure"
 
   superset:
-    image: apache/superset:latest
+    image: alexmerced/dremio-superset
     container_name: superset
     ports:
       - "8088:8088"
     environment:
-      SUPERSET_SECRET_KEY: "your_random_secret_key"
+      SUPERSET_SECRET_KEY: ${SUPERSET_SECRET_KEY}
       SUPERSET_LOAD_EXAMPLES: "no"
       SUPERSET_DATABASE_URI: postgresql+psycopg2://airflow:airflow@postgres:5432/superset
     depends_on:
@@ -243,7 +275,7 @@ services:
       dremio:
         condition: service_healthy
     volumes:
-      - ./volumes/superset:/app/superset_home
+      - ./volumes/superset/home:/app/superset_home
     command: >
       sh -c "
       superset db upgrade &&

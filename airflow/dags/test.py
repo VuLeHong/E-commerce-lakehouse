@@ -23,23 +23,12 @@ SPARK_PACKAGES = (
 )
 
 with DAG(
-    'batch-job',
+    'test-job',
     default_args=default_args,
     schedule_interval='@daily',
     catchup=False
 ) as dag:
 
-    bronze_batch_load = SparkSubmitOperator(
-        task_id="bronze_batch_load",
-        conn_id="spark",
-        application=str(BASE_DIR / "scripts" / "spark_jobs" / "bronze_batch_load.py"),
-        packages=(
-            "org.apache.hadoop:hadoop-aws:3.3.1,"
-            "org.postgresql:postgresql:42.7.3"
-        ),
-        conf=common_conf
-    )
-    
     silver_clean_transform = SparkSubmitOperator(
         task_id="silver_transform",
         conn_id="spark",
@@ -70,4 +59,4 @@ with DAG(
 
 # --- DAG Dependencies ---
 # Bronze → Bronze Quality Check
-bronze_batch_load >> silver_clean_transform >> gold_transform >> show_tables
+silver_clean_transform >> gold_transform >> show_tables

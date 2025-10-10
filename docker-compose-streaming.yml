@@ -2,7 +2,7 @@ version: "3.9"
 
 services:
   zookeeper:
-    image: bitnami/zookeeper:3.9
+    image: bitnamilegacy/zookeeper:3.9
     container_name: zookeeper
     environment:
       - ALLOW_ANONYMOUS_LOGIN=yes
@@ -13,7 +13,7 @@ services:
     restart: always
 
   kafka:
-    image: bitnami/kafka:3.6
+    image: bitnamilegacy/kafka:3.6
     container_name: kafka
     depends_on:
       - zookeeper
@@ -31,34 +31,34 @@ services:
       - myNetwork
     restart: always
 
-  # flink-jobmanager:
-  #   image: bitnami/flink:2
-  #   container_name: flink-jobmanager
-  #   environment:
-  #     - FLINK_MODE=jobmanager
-  #     - FLINK_JOB_MANAGER_RPC_ADDRESS=flink-jobmanager
-  #   ports:
-  #     - "8081:8081" # Flink REST API / UI
-  #   volumes:
-  #     - ./scripts/flink_jobs:/opt/bitnami/flink/scripts
-  #   networks:
-  #     - myNetwork
-  #   restart: unless-stopped
+  flink-jobmanager:
+    image: bitnamilegacy/flink:2
+    container_name: flink-jobmanager
+    environment:
+      - FLINK_MODE=jobmanager
+      - FLINK_JOB_MANAGER_RPC_ADDRESS=flink-jobmanager
+    ports:
+      - "8081:8081" # Flink REST API / UI
+    volumes:
+      - ./scripts/flink_jobs:/opt/bitnami/flink/scripts
+    networks:
+      - myNetwork
+    restart: unless-stopped
 
-  # flink-taskmanager:
-  #   image: bitnami/flink:2
-  #   container_name: flink-taskmanager
-  #   depends_on:
-  #     - flink-jobmanager
-  #   environment:
-  #     - FLINK_MODE=taskmanager
-  #     - FLINK_JOB_MANAGER_RPC_ADDRESS=flink-jobmanager
-  #     - FLINK_TASKMANAGER_NUMBER_OF_TASK_SLOTS=2
-  #   volumes:
-  #     - ./scripts/flink_jobs:/opt/bitnami/flink/scripts
-  #   networks:
-  #     - myNetwork
-  #   restart: unless-stopped
+  flink-taskmanager:
+    image: bitnamilegacy/flink:2
+    container_name: flink-taskmanager
+    depends_on:
+      - flink-jobmanager
+    environment:
+      - FLINK_MODE=taskmanager
+      - FLINK_JOB_MANAGER_RPC_ADDRESS=flink-jobmanager
+      - FLINK_TASKMANAGER_NUMBER_OF_TASK_SLOTS=2
+    volumes:
+      - ./scripts/flink_jobs:/opt/bitnami/flink/scripts
+    networks:
+      - myNetwork
+    restart: unless-stopped
 
   redis:
     image: redis/redis-stack:latest
