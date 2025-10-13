@@ -75,6 +75,7 @@ def transform(spark):
         )
         drop_if_exists(spark, "silver.dim_products")
         dim_products.writeTo("silver.dim_products") \
+            .tableProperty("format-version", "1") \
             .createOrReplace()
         logger.info("[SILVER] dim_products created successfully")
 
@@ -90,6 +91,7 @@ def transform(spark):
         )
         drop_if_exists(spark, "silver.dim_users")
         dim_users.writeTo("silver.dim_users") \
+            .tableProperty("format-version", "1") \
             .createOrReplace()
         logger.info("[SILVER] dim_users created successfully")
 
@@ -104,6 +106,7 @@ def transform(spark):
         )
         drop_if_exists(spark, "silver.fact_purchase_event")
         purchase_event.writeTo("silver.fact_purchase_event") \
+            .tableProperty("format-version", "1") \
             .createOrReplace()
         logger.info("[SILVER] fact_purchase_event created successfully")
 
@@ -117,6 +120,7 @@ def transform(spark):
         )
         drop_if_exists(spark, "silver.fact_reviews")
         fact_reviews.writeTo("silver.fact_reviews") \
+            .tableProperty("format-version", "1") \
             .createOrReplace()
         logger.info("[SILVER] fact_reviews created successfully")
 

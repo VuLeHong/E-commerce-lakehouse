@@ -30,7 +30,7 @@ def create_spark():
         .config("spark.hadoop.fs.s3a.path.style.access", "true")
         .config("spark.hadoop.fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem")
         
-        .config("spark.sql.extensions", "org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions, org.projectnessie.spark.extensions.NessieSparkSessionExtensions") 
+        .config("spark.sql.extensions", "org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions,org.projectnessie.spark.extensions.NessieSparkSessionExtensions") 
         .config("spark.sql.catalog.silver", "org.apache.iceberg.spark.SparkCatalog")
         # .config("spark.sql.catalog.silver.type", "nessie")
         .config("spark.sql.catalog.silver.catalog-impl", "org.apache.iceberg.nessie.NessieCatalog")
@@ -71,6 +71,7 @@ def transform(spark):
     sales_summary.writeTo("gold.sales_summary") \
                 .partitionedBy("year", "month") \
                 .option("merge-schema", "true") \
+                .tableProperty("format-version", "1") \
                 .createOrReplace()
 
 
@@ -89,6 +90,7 @@ def transform(spark):
     review_summary.writeTo("gold.review_summary") \
                 .partitionedBy("year", "month") \
                 .option("merge-schema", "true") \
+                .tableProperty("format-version", "1") \
                 .createOrReplace()
 
 

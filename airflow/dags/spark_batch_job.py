@@ -18,7 +18,7 @@ common_conf = {
 SPARK_PACKAGES = (
     "org.apache.hadoop:hadoop-aws:3.3.1,"
     "com.amazonaws:aws-java-sdk-bundle:1.12.262,"
-    "org.apache.iceberg:iceberg-spark-runtime-3.5_2.12:1.10.0,"
+    "org.apache.iceberg:iceberg-spark-runtime-3.5_2.12:1.5.0,"
     "org.projectnessie.nessie-integrations:nessie-spark-extensions-3.5_2.12:0.105.4"
 )
 

@@ -32,7 +32,6 @@ x-airflow-common: &airflow-common
     - ./scripts/spark_jobs:/opt/airflow/scripts/spark_jobs
     - ./scripts/utils.py:/opt/airflow/scripts/utils.py
     - ./jars:/opt/airflow/jars
-    - ./logs:/opt/airflow/logger
     - ./volumes/spark-cache/.ivy2:/home/airflow/.ivy2
     - ./.env:/opt/airflow/.env
 
@@ -171,7 +170,6 @@ services:
       - ./volumes/minio:/data
     command: server /data --console-address ":9001"
     restart: always
-    mem_limit: 768m
     networks:
       - myNetwork
     healthcheck:
@@ -208,14 +206,44 @@ services:
     restart: "on-failure"
     networks:
       - myNetwork
+  dremio-init:
+    image: postgres:15
+    container_name: dremio-initdb
+    depends_on:
+      postgres:
+        condition: service_healthy
+    entrypoint: >
+      bash -c "
+        echo '🧱 Waiting for Postgres to be ready...' &&
+        until pg_isready -h postgres -p 5432 -U airflow; do sleep 2; done &&
+        echo '✅ Postgres is ready, creating schema nessie...' &&
+        psql -h postgres -U airflow -d airflow -c \"CREATE SCHEMA IF NOT EXISTS nessie AUTHORIZATION airflow; GRANT ALL PRIVILEGES ON SCHEMA nessie TO airflow;\" &&
+        echo '🎉 Schema nessie ensured successfully.'
+      "
+    environment:
+      PGPASSWORD: airflow
+    networks:
+      - myNetwork
+    restart: "on-failure"      
 
   nessie:
     image: projectnessie/nessie:0.76.6
     container_name: nessie
     networks:
       - myNetwork
+    restart: always
+    environment:
+      - NESSIE_VERSION_STORE_TYPE=JDBC
+      - QUARKUS_DATASOURCE_JDBC_URL=jdbc:postgresql://postgres:5432/airflow?currentSchema=nessie
+      - QUARKUS_DATASOURCE_USERNAME=airflow
+      - QUARKUS_DATASOURCE_PASSWORD=airflow
+      - QUARKUS_DATASOURCE_DB_KIND=postgresql
+      - QUARKUS_HTTP_PORT=19120
+    depends_on:
+      - postgres
+      - dremio-init
     ports:
-      - 19120:19120
+      - "19120:19120"
 
   dremio:
     image: dremio/dremio-oss:latest
@@ -229,7 +257,6 @@ services:
       - DREMIO_JAVA_SERVER_HEAP_MAX=2G
       - DREMIO_JAVA_SERVER_HEAP_MIN=512M
     restart: always
-    mem_limit: 2g
     networks:
       - myNetwork
     depends_on:
