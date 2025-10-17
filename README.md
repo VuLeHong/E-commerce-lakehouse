@@ -4,5 +4,5 @@ This project proposes the development of an E-commerce Lakehouse that integrates
 - Monthly Business Dashboard for business intelligence and decision-making.
 
 <p align="center">
-  <img src="./image/architect.jpg" alt="Full architect" width="400"/>
+  <img src="./image/architect.jpg" alt="Full architect" width="800"/>
 </p>
