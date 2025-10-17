@@ -3,4 +3,6 @@ This project proposes the development of an E-commerce Lakehouse that integrates
 - Recommendation System using Collaborative Filtering (CF) and offline training models.   
 - Monthly Business Dashboard for business intelligence and decision-making.
 
-![Full project architect](./image/architect.jpg)
+<p align="center">
+  <img src="./image/architect.jpg" alt="Full architect" width="400"/>
+</p>
