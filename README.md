@@ -88,11 +88,3 @@ It collects user interactions and transactional data from an e-commerce platform
 
 ---
 
-## 📦 Future Improvements
-
-* Integrate **real-time model retraining** with MLflow pipelines.
-* Implement **user segmentation** for personalized recommendations.
-* Add **CI/CD pipelines** for automated model deployment.
-* Explore **Delta Lake** or **Apache Hudi** as alternative storage layers for Iceberg.
-
----
