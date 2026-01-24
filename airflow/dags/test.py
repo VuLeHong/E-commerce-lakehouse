@@ -12,7 +12,11 @@ default_args = {
 
 common_conf = {
     "spark.driver.extraJavaOptions": "-Dlog4j.rootCategory=ERROR,console",
-    "spark.executor.extraJavaOptions": "-Dlog4j.rootCategory=ERROR,console"
+    "spark.executor.extraJavaOptions": "-Dlog4j.rootCategory=ERROR,console",
+    "spark.rpc.askTimeout": "600s",
+    "spark.network.timeout": "600s",
+    "spark.executor.heartbeatInterval": "60s",
+
 }
 
 SPARK_PACKAGES = (
@@ -23,40 +27,22 @@ SPARK_PACKAGES = (
 )
 
 with DAG(
-    'test-job',
+    'train-job',
     default_args=default_args,
-    schedule_interval='@daily',
+    schedule_interval='@once',
     catchup=False
 ) as dag:
 
-    silver_clean_transform = SparkSubmitOperator(
-        task_id="silver_transform",
-        conn_id="spark",
-        application=str(BASE_DIR / "scripts" / "spark_jobs" / "silver_clean_transform.py"),
-        packages=SPARK_PACKAGES,
-        conf=common_conf,
-        deploy_mode="client"
-    )
 
-    gold_transform = SparkSubmitOperator(
-        task_id="gold_transform",
+    train_als_model = SparkSubmitOperator(
+        task_id="train_als_recommendation",
         conn_id="spark",
-        application=str(BASE_DIR / "scripts" / "spark_jobs" / "gold_transfrom.py"),
+        application=str(BASE_DIR / "scripts" / "spark_jobs" / "train_model.py"),
         packages=SPARK_PACKAGES,
         conf=common_conf,
         deploy_mode="client"
     )
-    
-    show_tables = SparkSubmitOperator(
-        task_id="show_tables",
-        conn_id="spark",
-        application=str(BASE_DIR / "scripts" / "spark_jobs" / "show_tables.py"),
-        packages=SPARK_PACKAGES,
-        conf=common_conf,
-        deploy_mode="client"
-    )
-
 
 # --- DAG Dependencies ---
 # Bronze → Bronze Quality Check
-silver_clean_transform >> gold_transform >> show_tables
+train_als_model

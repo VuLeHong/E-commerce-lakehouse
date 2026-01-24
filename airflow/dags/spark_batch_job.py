@@ -12,7 +12,10 @@ default_args = {
 
 common_conf = {
     "spark.driver.extraJavaOptions": "-Dlog4j.rootCategory=ERROR,console",
-    "spark.executor.extraJavaOptions": "-Dlog4j.rootCategory=ERROR,console"
+    "spark.executor.extraJavaOptions": "-Dlog4j.rootCategory=ERROR,console",
+    "spark.rpc.askTimeout": "600s",
+    "spark.network.timeout": "600s",
+    "spark.executor.heartbeatInterval": "60s",
 }
 
 SPARK_PACKAGES = (
@@ -58,6 +61,15 @@ with DAG(
         deploy_mode="client"
     )
     
+    train_als_model = SparkSubmitOperator(
+        task_id="train_als_recommendation",
+        conn_id="spark",
+        application=str(BASE_DIR / "scripts" / "spark_jobs" / "train_model.py"),
+        packages=SPARK_PACKAGES,
+        conf=common_conf,
+        deploy_mode="client"
+    )
+    
     show_tables = SparkSubmitOperator(
         task_id="show_tables",
         conn_id="spark",
@@ -70,4 +82,4 @@ with DAG(
 
 # --- DAG Dependencies ---
 # Bronze → Bronze Quality Check
-bronze_batch_load >> silver_clean_transform >> gold_transform >> show_tables
+bronze_batch_load >> silver_clean_transform >> gold_transform >> show_tables >> train_als_model

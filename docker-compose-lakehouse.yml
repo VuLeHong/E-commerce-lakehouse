@@ -201,6 +201,7 @@ services:
       (mc ls local/silver-layer || mc mb -p local/silver-layer) &&
       (mc ls local/gold-layer   || mc mb -p local/gold-layer) &&
       (mc ls local/checkpoints   || mc mb -p local/checkpoints) &&
+      (mc ls local/mlflow-models   || mc mb -p local/mlflow-models) &&
       echo '🎉 Buckets initialized successfully'
       "
     restart: "on-failure"
@@ -279,7 +280,9 @@ services:
         condition: service_healthy
     command: >
       bash -c "
-      psql -h postgres -U airflow -d airflow -c 'CREATE DATABASE superset;'
+      psql -h postgres -U airflow -d airflow -v ON_ERROR_STOP=1 -tc \"SELECT 1 FROM pg_database WHERE datname='superset';\" | grep -q 1 ||
+      psql -h postgres -U airflow -d airflow -v ON_ERROR_STOP=1 -c 'CREATE DATABASE superset;' &&
+      echo '✅ Superset database ready.'
       "
     environment:
       PGPASSWORD: airflow
@@ -314,6 +317,57 @@ services:
     networks:
       - myNetwork
 
+  mlflow-initdb:
+    image: postgres:15
+    container_name: mlflow-initdb
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: >
+      bash -c "
+      echo '⏳ Initializing MLflow database if not exists...' &&
+      psql -h postgres -U airflow -d airflow -v ON_ERROR_STOP=1 -tc \"SELECT 1 FROM pg_database WHERE datname='mlflow';\" | grep -q 1 ||
+      psql -h postgres -U airflow -d airflow -v ON_ERROR_STOP=1 -c \"CREATE DATABASE mlflow;\" &&
+      echo '✅ MLflow database ready.'"
+    environment:
+      PGPASSWORD: airflow
+    networks:
+      - myNetwork
+    restart: "on-failure"
+
+  mlflow_server:
+    build:
+      context: ./model_registry
+      dockerfile: Dockerfile
+    container_name: mlflow_server
+    restart: always
+    depends_on:
+      - postgres
+      - minio
+      - mlflow-initdb   
+    env_file:
+      - .env
+    ports:
+      - "5001:5000"
+    environment:
+      - AWS_ACCESS_KEY_ID=minioadmin
+      - AWS_SECRET_ACCESS_KEY=minioadmin
+      - MLFLOW_S3_ENDPOINT_URL=http://minio:9000
+      - MLFLOW_S3_IGNORE_TLS=true
+    command: >
+      mlflow server
+      --backend-store-uri postgresql://airflow:airflow@postgres:5432/mlflow
+      --host 0.0.0.0
+      --port 5000
+      --serve-artifacts
+      --artifacts-destination s3://mlflow-models
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - myNetwork
 networks:
   myNetwork:
     name: myNetwork

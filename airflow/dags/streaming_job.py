@@ -22,8 +22,8 @@ with DAG(
     catchup=False
 ) as dag:
 
-    bronze_streaming_load = SparkSubmitOperator(
-        task_id="bronze_streaming_load",
+    streaming_flow = SparkSubmitOperator(
+        task_id="streaming_flow",
         conn_id="spark",
         application=str(BASE_DIR / "scripts" / "spark_jobs" / "streaming_flow.py"),
         packages=(
@@ -35,4 +35,4 @@ with DAG(
 
 # --- DAG Dependencies ---
 # Bronze → Bronze Quality Check
-bronze_streaming_load
+streaming_flow

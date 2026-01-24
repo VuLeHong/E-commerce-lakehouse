@@ -73,23 +73,29 @@ def main():
     data_dir = Path(DATA_DIR)
     threads = []
 
-    # Start producers
     for etype in EVENT_TYPES:
         fpath = data_dir / f"{etype}.jsonl"
-        if fpath.exists():
-            records = load_jsonl(fpath)
-        else:
-            records = []
+        records = load_jsonl(fpath) if fpath.exists() else []
+
         topic = f"{TOPIC_PREFIX}.{etype}"
         producer = make_producer()
-        t = threading.Thread(target=producer_loop, args=(etype, records, producer, topic), daemon=True)
+
+        t = threading.Thread(
+            target=producer_loop,
+            args=(etype, records, producer, topic),
+            daemon=True
+        )
         t.start()
         threads.append(t)
         time.sleep(0.2)
 
     print("🚀 Producers đã chạy. Ctrl+C để dừng.")
-    while any(t.is_alive() for t in threads):
-        time.sleep(1)
+
+    try:
+        while any(t.is_alive() for t in threads):
+            time.sleep(1)
+    except KeyboardInterrupt:
+        print("\n🛑 Nhận Ctrl+C – đang dừng producers...")
 
 if __name__ == "__main__":
     main()
