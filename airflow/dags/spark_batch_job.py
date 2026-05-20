@@ -28,7 +28,7 @@ SPARK_PACKAGES = (
 with DAG(
     'batch-job',
     default_args=default_args,
-    schedule_interval='@daily',
+    schedule_interval='@once',
     catchup=False
 ) as dag:
 

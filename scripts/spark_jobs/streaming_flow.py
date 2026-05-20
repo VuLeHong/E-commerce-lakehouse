@@ -4,6 +4,7 @@ import json
 import logging
 from pathlib import Path
 from dotenv import load_dotenv
+from datetime import datetime
 
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import (
@@ -31,10 +32,11 @@ logging.basicConfig(
 logger = logging.getLogger("streaming-als")
 
 # ===== Paths from training =====
-USER_FACTORS_PATH = "s3a://gold-layer/als/user_factors"
-ITEM_FACTORS_PATH = "s3a://gold-layer/als/item_factors"
-USER_MAPPING_PATH = "s3a://gold-layer/als/user_mapping"
-ITEM_MAPPING_PATH = "s3a://gold-layer/als/item_mapping"
+USER_FACTORS_PATH = "s3a://gold-layer/ml/als/user_factors"
+ITEM_FACTORS_PATH = "s3a://gold-layer/ml/als/item_factors"
+
+USER_MAPPING_PATH = "s3a://gold-layer/ml/als/user_mapping"
+ITEM_MAPPING_PATH = "s3a://gold-layer/ml/als/item_mapping"
 
 CANDIDATE_POOL_SIZE = int(os.getenv("CANDIDATE_POOL_SIZE", 200))
 FINAL_TOPK = int(os.getenv("FINAL_TOPK", 10))
@@ -154,11 +156,14 @@ def streaming_job(spark: SparkSession):
     # foreachBatch
     # =================================================
     def process_batch(batch_df, batch_id):
+        start_time = datetime.now()
+
         if batch_df.isEmpty():
             logger.debug(f"[Batch {batch_id}] empty")
             return
 
-        logger.info(f"[Batch {batch_id}] input_rows={batch_df.count()}")
+        input_rows = batch_df.count()
+        logger.info(f"[Batch {batch_id}] input_rows={input_rows}")
 
         try:
             base = (
@@ -186,14 +191,15 @@ def streaming_job(spark: SparkSession):
                 )
             )
 
-            rows = topk.collect()
+            result_rows = topk.collect()
 
         except Exception:
             logger.exception(f"[Batch {batch_id}] scoring / topK failed")
             return
 
-        # ---------- Redis + Kafka ----------
-        for row in rows:
+        messages = []
+
+        for row in result_rows:
             user_id = row["user_id"]
             candidates = [x for x in row["candidates"] if x]
             if not candidates:
@@ -219,19 +225,41 @@ def streaming_job(spark: SparkSession):
             r.rpush(key, *final)
             r.expire(key, 300)
 
+            messages.append({
+                "user_id": user_id,
+                "recommendations": final
+            })
+
+        emitted_users = len(messages)
+
+        end_time = datetime.now()
+        latency = (end_time - start_time).total_seconds()
+        throughput = input_rows / latency if latency > 0 else 0.0
+
+        for msg in messages:
             producer.send(
                 "recommend.reranked",
-                key=user_id,
+                key=msg["user_id"],
                 value={
-                    "user_id": user_id,
-                    "recommendations": final,
-                    "source": "als_realtime"
+                    "user_id": msg["user_id"],
+                    "recommendations": msg["recommendations"],
+                    "source": "als_realtime",
+                    "metrics": {
+                        "batch_id": batch_id,
+                        "input_rows": input_rows,
+                        "emitted_users": emitted_users,
+                        "latency_seconds": latency,
+                        "throughput_events_per_sec": throughput
+                    }
                 }
             )
 
         producer.flush()
-        logger.info(f"[Batch {batch_id}] emitted {len(rows)} users")
 
+        logger.info(f"[Batch {batch_id}] latency={latency:.3f} seconds")
+        logger.info(f"[Batch {batch_id}] throughput={throughput:.2f} events/sec")
+        logger.info(f"[Batch {batch_id}] emitted_users={emitted_users}")
+        
     (
         parsed.writeStream
         .foreachBatch(process_batch)
