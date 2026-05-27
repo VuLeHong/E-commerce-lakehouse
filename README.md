@@ -3,7 +3,7 @@
 This project implements a unified Lakehouse architecture for e-commerce analytics and real-time recommendation processing. The system integrates batch data processing and streaming event processing within the same platform, allowing historical analytics, recommendation model training, dashboard visualization, and real-time recommendation reranking to operate on shared Lakehouse data layers.
 
 <p align="center">
-  <img src="./image/Lakehouse.jpg" alt="Lakehouse Architecture" width="850"/>
+  <img src="./image/Lakehouse.png" alt="Lakehouse Architecture" width="850"/>
 </p>
 
 ---
