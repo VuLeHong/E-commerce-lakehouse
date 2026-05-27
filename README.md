@@ -855,6 +855,3 @@ This confirms that the streaming recommendation pipeline is working.
 | Nessie API      | `http://localhost:19120` | Iceberg catalog metadata API    | No login by default           |
 | Kafka           | `localhost:29092`        | External Kafka access from host | No login by default           |
 
-
-```
-```
