@@ -121,7 +121,7 @@ The shared Lakehouse storage is built on MinIO, Apache Iceberg, and Project Ness
 │       └── review.jsonl
 │
 ├── image/
-│   └── architect.jpg
+│   └── Lakehouse.png
 │
 ├── scripts/
 │   ├── database/
@@ -435,24 +435,6 @@ order_items
 reviews
 ```
 
-To verify the source database manually:
-
-```bash
-docker exec -it backend-postgres psql -U ecommerce -d ecommerce
-```
-
-Inside PostgreSQL:
-
-```sql
-\dt
-
-SELECT COUNT(*) FROM users;
-SELECT COUNT(*) FROM products;
-SELECT COUNT(*) FROM orders;
-SELECT COUNT(*) FROM order_items;
-SELECT COUNT(*) FROM reviews;
-```
-
 ---
 
 ### 7.7 Run Batch Lakehouse Pipeline and Train Recommendation Model
@@ -468,6 +450,21 @@ Login:
 ```text
 Username: admin
 Password: admin
+```
+
+Go to:
+
+```text
+Admin → Connections → + Add Connection
+```
+
+Create a new connection with the following values:
+
+```text
+Connection Id = spark
+Connection Type = Spark
+Host = spark://spark-master
+Port = 7077
 ```
 
 Find the DAG:
@@ -487,9 +484,9 @@ silver_transform
         ↓
 gold_transform
         ↓
-train_model
-        ↓
 show_tables
+        ↓
+train_model
 ```
 
 The batch pipeline performs these tasks:
@@ -590,9 +587,10 @@ Root Path: /
 Use the following connection properties if Dremio requires them:
 
 ```text
-fs.s3a.endpoint = http://minio:9000
+fs.s3a.endpoint = minio:9000
 fs.s3a.path.style.access = true
 dremio.s3.compat = true
+fs.s3a.connection.ssl.enabled = false
 ```
 
 After saving the source, verify that Dremio can access the Iceberg tables created by Spark.
