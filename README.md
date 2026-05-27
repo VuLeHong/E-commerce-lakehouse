@@ -101,7 +101,8 @@ The shared Lakehouse storage is built on MinIO, Apache Iceberg, and Project Ness
 .
 ├── airflow/
 │   ├── dags/
-│   │   └── spark_batch_job.py
+│   │   ├── spark_batch_job.py
+│   │   └── streaming_job.py
 │   ├── logs/
 │   ├── Dockerfile
 │   └── requirements.txt
@@ -137,6 +138,7 @@ The shared Lakehouse storage is built on MinIO, Apache Iceberg, and Project Ness
 │   │
 │   └── streaming/
 │       ├── event_producer.py
+│       ├──test_consumer.py
 │       └── test_consumer.py
 │
 ├── batch_stimulate.py
@@ -511,14 +513,6 @@ gold-layer/ml/als/user_mapping
 gold-layer/ml/als/item_mapping
 ```
 
-If model training is not included in your DAG version, run it manually:
-
-```bash
-docker exec -it spark-master spark-submit \
-  --packages org.apache.hadoop:hadoop-aws:3.3.1,com.amazonaws:aws-java-sdk-bundle:1.12.262,org.apache.iceberg:iceberg-spark-runtime-3.5_2.12:1.5.0,org.projectnessie.nessie-integrations:nessie-spark-extensions-3.5_2.12:0.105.4 \
-  /opt/bitnami/spark/scripts/train_model.py
-```
-
 ---
 
 ### 7.8 Validate Lakehouse Tables
@@ -774,12 +768,22 @@ The producer continuously sends random user behaviour events from the generated 
 
 ### 7.14 Run Real-Time Recommendation Pipeline
 
-Run the Spark Structured Streaming recommendation job:
+Open Airflow:
 
-```bash
-docker exec -it spark-master spark-submit \
-  --packages org.apache.hadoop:hadoop-aws:3.3.1,com.amazonaws:aws-java-sdk-bundle:1.12.262,org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.1 \
-  /opt/bitnami/spark/scripts/streaming_flow.py
+```text
+http://localhost:8088
+```
+
+Find the streaming DAG:
+
+```text
+streaming-job
+```
+
+The streaming DAG should run the following Spark job:
+
+```text
+scripts/spark_jobs/streaming_flow.py
 ```
 
 The streaming job performs the following operations:
@@ -851,21 +855,6 @@ This confirms that the streaming recommendation pipeline is working.
 | Nessie API      | `http://localhost:19120` | Iceberg catalog metadata API    | No login by default           |
 | Kafka           | `localhost:29092`        | External Kafka access from host | No login by default           |
 
----
-
-## 9. Final Report / References
-
-The full project design, implementation explanation, validation results, evaluation, limitations, and future work are documented in the final report.
-
-Recommended files to include with the repository:
-
-```text
-25195671_LeHongVu_Project Final Report.pdf
-image/architect.jpg
-README.md
-```
-
-The README focuses on how to set up, run, and view the implemented product. For detailed academic discussion and evaluation, refer to the final report.
 
 ```
 ```
