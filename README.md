@@ -1,6 +1,3 @@
-Dưới đây là bản `README.md` hoàn chỉnh để bạn copy trực tiếp.
-
-````md
 # E-Commerce Lakehouse
 
 This project implements a unified Lakehouse architecture for e-commerce analytics and real-time recommendation processing. The system integrates batch data processing and streaming event processing within the same platform, allowing historical analytics, recommendation model training, dashboard visualization, and real-time recommendation reranking to operate on shared Lakehouse data layers.
