@@ -3,12 +3,19 @@ import sys
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 import logging
-from pyspark.sql import SparkSession
-from pyspark.sql.functions import *
-from pyspark.sql.utils import AnalysisException
-from dotenv import load_dotenv
 from pathlib import Path
 
+from dotenv import load_dotenv
+
+from pyspark.sql import SparkSession
+from pyspark.sql import functions as F
+from pyspark.sql.window import Window
+from pyspark.sql.utils import AnalysisException
+
+
+# =========================================================
+# SETUP
+# =========================================================
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
 
 logging.basicConfig(
@@ -20,6 +27,7 @@ logger = logging.getLogger(__name__)
 
 dotenv_path = BASE_DIR / ".env"
 load_dotenv(dotenv_path)
+
 
 # =========================================================
 # SPARK
@@ -56,23 +64,89 @@ def create_spark():
         .getOrCreate()
     )
 
+
 # =========================================================
 # HELPERS
 # =========================================================
+BRONZE_META_COLS = [
+    "_bronze_year",
+    "_bronze_month",
+    "_bronze_day"
+]
+
+
 def safe_read_parquet(spark, path):
+    """
+    Read a bronze parquet path.
+
+    Bronze is partitioned by year/month/day.
+    Instead of dropping these columns immediately, keep them as
+    _bronze_year/_bronze_month/_bronze_day so silver can use them
+    as a tie-breaker when selecting latest records.
+    """
     try:
         df = spark.read.parquet(path)
 
-        # remove partition cols from bronze
-        for c in ["year", "month", "day"]:
-            if c in df.columns:
-                df = df.drop(c)
+        rename_map = {
+            "year": "_bronze_year",
+            "month": "_bronze_month",
+            "day": "_bronze_day"
+        }
+
+        for old_col, new_col in rename_map.items():
+            if old_col in df.columns:
+                df = df.withColumnRenamed(old_col, new_col)
 
         return df
 
     except AnalysisException:
         logger.warning(f"Path not found: {path}")
         return None
+
+
+def drop_bronze_metadata(df):
+    """
+    Remove bronze partition metadata before writing to silver tables.
+    """
+    drop_cols = [c for c in BRONZE_META_COLS if c in df.columns]
+    return df.drop(*drop_cols) if drop_cols else df
+
+
+def latest_by_key(df, keys, order_cols):
+    """
+    Select latest record per business key from append-only bronze data.
+
+    keys:
+        Business key columns, for example ["product_id"].
+
+    order_cols:
+        Columns used to define latest record.
+        Example: ["updated_at", "_bronze_year", "_bronze_month", "_bronze_day"].
+    """
+    valid_order_cols = [c for c in order_cols if c in df.columns]
+
+    if not valid_order_cols:
+        logger.warning(
+            f"No valid order columns found for keys={keys}. "
+            f"Fallback to dropDuplicates({keys})."
+        )
+        return df.dropDuplicates(keys)
+
+    window_spec = (
+        Window
+        .partitionBy(*[F.col(k) for k in keys])
+        .orderBy(*[
+            F.col(c).desc_nulls_last()
+            for c in valid_order_cols
+        ])
+    )
+
+    return (
+        df
+        .withColumn("_rn", F.row_number().over(window_spec))
+        .filter(F.col("_rn") == 1)
+        .drop("_rn")
+    )
 
 
 def overwrite_table(df, table_name):
@@ -95,44 +169,86 @@ def transform(spark):
     # =====================================================
     # USERS
     # =====================================================
-    users = safe_read_parquet(spark, f"{bronze}/brz.users")
+    users = safe_read_parquet(
+        spark,
+        f"{bronze}/brz.users"
+    )
 
     if users is not None:
 
-        silver_users = (
+        users_clean = (
             users
-            .filter(col("user_id").isNotNull())
+            .filter(F.col("user_id").isNotNull())
 
-            .dropDuplicates(["user_id"])
+            .withColumn(
+                "user_id",
+                F.col("user_id").cast("int")
+            )
 
             .withColumn(
                 "email",
-                lower(trim(col("email")))
+                F.lower(F.trim(F.col("email")))
             )
 
             .withColumn(
                 "first_name",
-                initcap(trim(col("first_name")))
+                F.initcap(F.trim(F.col("first_name")))
             )
 
             .withColumn(
                 "last_name",
-                initcap(trim(col("last_name")))
+                F.initcap(F.trim(F.col("last_name")))
+            )
+
+            .withColumn(
+                "phone_number",
+                F.trim(F.col("phone_number"))
+            )
+
+            .withColumn(
+                "address",
+                F.trim(F.col("address"))
             )
 
             .withColumn(
                 "country",
-                upper(trim(col("country")))
+                F.upper(F.trim(F.col("country")))
             )
 
             .withColumn(
                 "city",
-                initcap(trim(col("city")))
+                F.initcap(F.trim(F.col("city")))
             )
 
             .withColumn(
                 "created_at",
-                to_timestamp(col("created_at"))
+                F.to_timestamp(F.col("created_at"))
+            )
+        )
+
+        # users source only has created_at, not updated_at.
+        # So latest is based on created_at + bronze partition tie-breaker.
+        silver_users = (
+            latest_by_key(
+                users_clean,
+                keys=["user_id"],
+                order_cols=[
+                    "created_at",
+                    "_bronze_year",
+                    "_bronze_month",
+                    "_bronze_day"
+                ]
+            )
+            .select(
+                "user_id",
+                "first_name",
+                "last_name",
+                "email",
+                "phone_number",
+                "address",
+                "city",
+                "country",
+                "created_at"
             )
         )
 
@@ -142,55 +258,148 @@ def transform(spark):
         )
 
     # =====================================================
-    # PRODUCTS
+    # CATEGORIES
+    # Used for enriching products
     # =====================================================
-    products = safe_read_parquet(spark, f"{bronze}/brz.products")
-    categories = safe_read_parquet(spark, f"{bronze}/brz.categories")
+    categories = safe_read_parquet(
+        spark,
+        f"{bronze}/brz.categories"
+    )
 
-    if products is not None and categories is not None:
+    categories_latest = None
 
-        silver_products = (
-            products
-            .join(
-                categories.select(
-                    "category_id",
-                    "category_name"
-                ),
+    if categories is not None:
+
+        categories_clean = (
+            categories
+            .filter(F.col("category_id").isNotNull())
+
+            .withColumn(
                 "category_id",
-                "left"
-            )
-
-            .filter(col("product_id").isNotNull())
-
-            .dropDuplicates(["product_id"])
-
-            .withColumn(
-                "product_name",
-                trim(col("product_name"))
-            )
-
-            .withColumn(
-                "brand",
-                upper(trim(col("brand")))
+                F.col("category_id").cast("int")
             )
 
             .withColumn(
                 "category_name",
-                initcap(trim(col("category_name")))
+                F.initcap(F.trim(F.col("category_name")))
+            )
+
+            .withColumn(
+                "updated_at",
+                F.to_timestamp(F.col("updated_at"))
+            )
+        )
+
+        categories_latest = (
+            latest_by_key(
+                categories_clean,
+                keys=["category_id"],
+                order_cols=[
+                    "updated_at",
+                    "_bronze_year",
+                    "_bronze_month",
+                    "_bronze_day"
+                ]
+            )
+            .select(
+                "category_id",
+                "category_name"
+            )
+        )
+
+    # =====================================================
+    # PRODUCTS
+    # =====================================================
+    products = safe_read_parquet(
+        spark,
+        f"{bronze}/brz.products"
+    )
+
+    if products is not None:
+
+        products_clean = (
+            products
+            .filter(F.col("product_id").isNotNull())
+
+            .withColumn(
+                "product_id",
+                F.col("product_id").cast("int")
+            )
+
+            .withColumn(
+                "category_id",
+                F.col("category_id").cast("int")
+            )
+
+            .withColumn(
+                "product_name",
+                F.trim(F.col("product_name"))
+            )
+
+            .withColumn(
+                "brand",
+                F.upper(F.trim(F.col("brand")))
             )
 
             .withColumn(
                 "price",
-                round(col("price"), 2)
+                F.round(F.col("price"), 2)
             )
 
-            .filter(col("price") > 0)
+            .filter(F.col("price") > 0)
 
             .withColumn(
                 "updated_at",
-                to_timestamp(col("updated_at"))
+                F.to_timestamp(F.col("updated_at"))
             )
         )
+
+        products_latest = latest_by_key(
+            products_clean,
+            keys=["product_id"],
+            order_cols=[
+                "updated_at",
+                "_bronze_year",
+                "_bronze_month",
+                "_bronze_day"
+            ]
+        )
+
+        if categories_latest is not None:
+            silver_products = (
+                products_latest
+                .join(
+                    categories_latest,
+                    on="category_id",
+                    how="left"
+                )
+                .select(
+                    "product_id",
+                    "product_name",
+                    "category_id",
+                    "category_name",
+                    "brand",
+                    "price",
+                    "updated_at"
+                )
+            )
+        else:
+            silver_products = (
+                products_latest
+                .withColumn(
+                    "category_name",
+                    F.lit(None).cast("string")
+                )
+                .select(
+                    "product_id",
+                    "product_name",
+                    "category_id",
+                    "category_name",
+                    "brand",
+                    "price",
+                    "updated_at"
+                )
+            )
 
         overwrite_table(
             silver_products,
@@ -200,27 +409,59 @@ def transform(spark):
     # =====================================================
     # ORDERS
     # =====================================================
-    orders = safe_read_parquet(spark, f"{bronze}/brz.orders")
+    orders = safe_read_parquet(
+        spark,
+        f"{bronze}/brz.orders"
+    )
 
     if orders is not None:
 
-        silver_orders = (
+        orders_clean = (
             orders
-            .filter(col("order_id").isNotNull())
-            .filter(col("user_id").isNotNull())
+            .filter(F.col("order_id").isNotNull())
+            .filter(F.col("user_id").isNotNull())
 
-            .dropDuplicates(["order_id"])
+            .withColumn(
+                "order_id",
+                F.col("order_id").cast("int")
+            )
+
+            .withColumn(
+                "user_id",
+                F.col("user_id").cast("int")
+            )
 
             .withColumn(
                 "total_price",
-                round(col("total_price"), 2)
+                F.round(F.col("total_price"), 2)
             )
 
-            .filter(col("total_price") > 0)
+            .filter(F.col("total_price") > 0)
 
             .withColumn(
                 "order_date",
-                to_timestamp(col("order_date"))
+                F.to_timestamp(F.col("order_date"))
+            )
+        )
+
+        # orders are fact-like records.
+        # If duplicate order_id appears because of rerun/replay, keep latest order_date.
+        silver_orders = (
+            latest_by_key(
+                orders_clean,
+                keys=["order_id"],
+                order_cols=[
+                    "order_date",
+                    "_bronze_year",
+                    "_bronze_month",
+                    "_bronze_day"
+                ]
+            )
+            .select(
+                "order_id",
+                "user_id",
+                "total_price",
+                "order_date"
             )
         )
 
@@ -239,23 +480,69 @@ def transform(spark):
 
     if order_items is not None:
 
-        silver_order_items = (
+        order_items_clean = (
             order_items
-            .filter(col("order_item_id").isNotNull())
-
-            .dropDuplicates(["order_item_id"])
-
-            .filter(col("quantity") > 0)
-            .filter(col("price") > 0)
+            .filter(F.col("order_item_id").isNotNull())
+            .filter(F.col("order_id").isNotNull())
+            .filter(F.col("product_id").isNotNull())
 
             .withColumn(
-                "price",
-                round(col("price"), 2)
+                "order_item_id",
+                F.col("order_item_id").cast("int")
             )
 
             .withColumn(
+                "order_id",
+                F.col("order_id").cast("int")
+            )
+
+            .withColumn(
+                "product_id",
+                F.col("product_id").cast("int")
+            )
+
+            .withColumn(
+                "quantity",
+                F.col("quantity").cast("int")
+            )
+
+            .filter(F.col("quantity") > 0)
+
+            .withColumn(
+                "price",
+                F.round(F.col("price"), 2)
+            )
+
+            .filter(F.col("price") > 0)
+
+            .withColumn(
                 "item_total",
-                round(col("item_total"), 2)
+                F.round(F.col("item_total"), 2)
+            )
+
+            .filter(F.col("item_total") > 0)
+        )
+
+        # order_items has no timestamp in source.
+        # Bronze batch and streaming both partition order_items by current_date().
+        # Use bronze partition as deterministic tie-breaker if duplicate item id exists.
+        silver_order_items = (
+            latest_by_key(
+                order_items_clean,
+                keys=["order_item_id"],
+                order_cols=[
+                    "_bronze_year",
+                    "_bronze_month",
+                    "_bronze_day"
+                ]
+            )
+            .select(
+                "order_item_id",
+                "order_id",
+                "product_id",
+                "quantity",
+                "price",
+                "item_total"
             )
         )
 
@@ -267,26 +554,72 @@ def transform(spark):
     # =====================================================
     # REVIEWS
     # =====================================================
-    reviews = safe_read_parquet(spark, f"{bronze}/brz.reviews")
+    reviews = safe_read_parquet(
+        spark,
+        f"{bronze}/brz.reviews"
+    )
 
     if reviews is not None:
 
-        silver_reviews = (
+        reviews_clean = (
             reviews
-            .filter(col("review_id").isNotNull())
+            .filter(F.col("review_id").isNotNull())
+            .filter(F.col("user_id").isNotNull())
+            .filter(F.col("product_id").isNotNull())
 
-            .dropDuplicates(["review_id"])
+            .withColumn(
+                "review_id",
+                F.col("review_id").cast("int")
+            )
 
-            .filter(col("rating").between(1, 5))
+            .withColumn(
+                "user_id",
+                F.col("user_id").cast("int")
+            )
+
+            .withColumn(
+                "product_id",
+                F.col("product_id").cast("int")
+            )
+
+            .withColumn(
+                "rating",
+                F.col("rating").cast("int")
+            )
+
+            .filter(F.col("rating").between(1, 5))
 
             .withColumn(
                 "review_text",
-                trim(col("review_text"))
+                F.trim(F.col("review_text"))
             )
 
             .withColumn(
                 "review_date",
-                to_timestamp(col("review_date"))
+                F.to_timestamp(F.col("review_date"))
+            )
+        )
+
+        # reviews are also event/fact-like records.
+        # If duplicate review_id exists, keep the latest review_date.
+        silver_reviews = (
+            latest_by_key(
+                reviews_clean,
+                keys=["review_id"],
+                order_cols=[
+                    "review_date",
+                    "_bronze_year",
+                    "_bronze_month",
+                    "_bronze_day"
+                ]
+            )
+            .select(
+                "review_id",
+                "user_id",
+                "product_id",
+                "rating",
+                "review_text",
+                "review_date"
             )
         )
 
@@ -294,6 +627,8 @@ def transform(spark):
             silver_reviews,
             "silver.reviews"
         )
+
+    logger.info("Silver transformation completed")
 
 
 # =========================================================
@@ -305,7 +640,6 @@ if __name__ == "__main__":
 
     try:
         transform(spark)
-        logger.info("Silver transformation completed")
 
     finally:
         spark.stop()

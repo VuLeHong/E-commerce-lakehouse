@@ -598,6 +598,11 @@ dim_date
 fact_sales
 fact_reviews
 fact_user_interactions
+order_items
+orders
+products
+reviews
+users
 ```
 
 ---
@@ -670,11 +675,11 @@ Recommended charts:
 | Total Orders KPI           | `fact_sales`                   | Count distinct `order_id` |
 | Total Users KPI            | `dim_users`                    | Count users               |
 | Monthly Sales Trend        | `fact_sales`, `dim_date`       | Revenue by month          |
+| Monthly Orders Trend       | `fact_sales`, `dim_date`       | Orders by month           |
 | Top Products by Revenue    | `fact_sales`, `dim_products`   | Product revenue ranking   |
 | Top Product Categories     | `fact_sales`, `dim_products`   | Revenue by category       |
 | Review Rating Distribution | `fact_reviews`                 | Count reviews by rating   |
 | Average Product Rating     | `fact_reviews`, `dim_products` | Average rating by product |
-| Customer Distribution      | `dim_users`                    | Users by city or country  |
 
 Dashboard creation flow:
 
